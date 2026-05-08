@@ -4232,6 +4232,8 @@ impl RedDBRuntime {
             QueryExpr::Insert(ref insert) => self.execute_insert(query, insert),
             QueryExpr::Update(ref update) => self.execute_update(query, update),
             QueryExpr::Delete(ref delete) => self.execute_delete(query, delete),
+            QueryExpr::Kv(ref kv) => crate::runtime::kv_atomic::KvAtomicOps::new(self)
+                .execute(query, kv),
             // DDL execution
             QueryExpr::CreateTable(ref create) => self.execute_create_table(query, create),
             QueryExpr::DropTable(ref drop_tbl) => self.execute_drop_table(query, drop_tbl),

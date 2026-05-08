@@ -1,8 +1,8 @@
 //! DML SQL Parser: INSERT, UPDATE, DELETE
 
 use super::super::ast::{
-    AskQuery, DeleteQuery, Expr, Filter, InsertEntityType, InsertQuery, QueryExpr, ReturningItem,
-    UpdateQuery,
+    AskQuery, DeleteQuery, Expr, Filter, InsertEntityType, InsertQuery, KvQuery, QueryExpr,
+    ReturningItem, UpdateQuery,
 };
 use super::super::lexer::Token;
 use super::error::ParseError;
@@ -365,6 +365,73 @@ impl<'a> Parser<'a> {
             filter,
             returning,
         }))
+    }
+
+    /// Parse: PUT key = value [EXPIRE duration] [IF NOT EXISTS]
+    pub fn parse_kv_put_query(&mut self) -> Result<QueryExpr, ParseError> {
+        self.expect_ident_ci("PUT")?;
+        let key = self.parse_kv_key()?;
+        self.expect(Token::Eq)?;
+        let value = self.parse_expr_value()?;
+
+        let ttl_ms = if self.consume_ident_ci("EXPIRE")? {
+            Some(self.parse_ttl_duration()?)
+        } else {
+            None
+        };
+
+        let if_not_exists = if self.consume(&Token::If)? {
+            self.expect(Token::Not)?;
+            self.expect(Token::Exists)?;
+            true
+        } else {
+            false
+        };
+
+        Ok(QueryExpr::Kv(KvQuery::Put {
+            key,
+            value,
+            ttl_ms,
+            if_not_exists,
+        }))
+    }
+
+    /// Parse: GET key
+    pub fn parse_kv_get_query(&mut self) -> Result<QueryExpr, ParseError> {
+        self.expect_ident_ci("GET")?;
+        let key = self.parse_kv_key()?;
+        Ok(QueryExpr::Kv(KvQuery::Get { key }))
+    }
+
+    /// Parse: DELETE key
+    pub fn parse_kv_delete_query(&mut self) -> Result<QueryExpr, ParseError> {
+        self.expect(Token::Delete)?;
+        let key = self.parse_kv_key()?;
+        Ok(QueryExpr::Kv(KvQuery::Delete { key }))
+    }
+
+    fn parse_kv_key(&mut self) -> Result<String, ParseError> {
+        let mut key = self.parse_kv_key_part()?;
+        while self.consume(&Token::Dot)? {
+            let part = self.parse_kv_key_part()?;
+            key.push('.');
+            key.push_str(&part);
+        }
+        Ok(key)
+    }
+
+    fn parse_kv_key_part(&mut self) -> Result<String, ParseError> {
+        match self.peek().clone() {
+            Token::Ident(part) | Token::String(part) => {
+                self.advance()?;
+                Ok(part)
+            }
+            Token::Integer(part) => {
+                self.advance()?;
+                Ok(part.to_string())
+            }
+            _ => self.expect_ident_or_keyword(),
+        }
     }
 
     /// Parse optional `RETURNING (* | col [, col ...])` clause.

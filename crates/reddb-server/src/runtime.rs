@@ -838,6 +838,7 @@ mod impl_dml;
 mod impl_ec;
 mod impl_graph;
 mod impl_graph_commands;
+pub mod kv_atomic;
 mod impl_migrations;
 mod impl_native;
 mod impl_physical;
