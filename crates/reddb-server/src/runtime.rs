@@ -635,6 +635,10 @@ struct RuntimeInner {
         std::collections::VecDeque<String>,
     )>,
     result_cache_shadow_divergences: std::sync::atomic::AtomicU64,
+    /// Per-key mutexes for atomic KV counter operations. The map only
+    /// serializes read-modify-write cycles for the same `(collection, key)`;
+    /// unrelated counters can still progress independently.
+    kv_atomic_locks: parking_lot::RwLock<HashMap<(String, String), Arc<parking_lot::Mutex<()>>>>,
     /// Process-local queue message locks used to emulate `SKIP LOCKED`-style
     /// claim semantics for concurrent queue consumers inside this runtime.
     queue_message_locks: parking_lot::RwLock<HashMap<String, Arc<parking_lot::Mutex<()>>>>,
@@ -849,6 +853,7 @@ mod impl_tree;
 mod impl_vcs;
 mod index_store;
 mod join_filter;
+pub mod kv_atomic;
 pub mod lease_lifecycle;
 pub mod lease_loop;
 pub mod lease_timer_wheel;
@@ -869,10 +874,11 @@ pub mod within_clause;
 pub mod write_gate;
 
 pub use self::graph_dsl::*;
-pub use self::statement_frame::EffectiveScope;
 use self::join_filter::*;
+pub use self::kv_atomic::{KvAtomicCommand, KvAtomicOp, KvAtomicOps};
 use self::query_exec::*;
 use self::record_search::*;
+pub use self::statement_frame::EffectiveScope;
 
 /// Re-exports for transports + tests that need per-connection
 /// isolation, tenant / auth thread-locals, and MVCC snapshot
