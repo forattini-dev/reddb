@@ -1627,11 +1627,12 @@ pub struct DeleteQuery {
 /// Top-level key-value operations.
 #[derive(Debug, Clone)]
 pub enum KvQuery {
-    /// `PUT key = value [EXPIRE duration] [IF NOT EXISTS]`
+    /// `PUT key = value [EXPIRE duration] [TAGS [tag, ...]] [IF NOT EXISTS]`
     Put {
         key: String,
         value: Value,
         ttl_ms: Option<u64>,
+        tags: Vec<String>,
         if_not_exists: bool,
     },
     /// `GET key`
@@ -1643,6 +1644,11 @@ pub enum KvQuery {
         key: String,
         by: i64,
         ttl_ms: Option<u64>,
+    },
+    /// `INVALIDATE TAGS [tag, ...] FROM collection`
+    InvalidateTags {
+        collection: String,
+        tags: Vec<String>,
     },
 }
 

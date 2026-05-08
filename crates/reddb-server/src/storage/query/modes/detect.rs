@@ -89,6 +89,7 @@ pub fn detect_mode(input: &str) -> QueryMode {
         || lower.starts_with("get ")
         || lower.starts_with("incr ")
         || lower.starts_with("decr ")
+        || lower.starts_with("invalidate ")
         || lower.starts_with("create ")
         || lower.starts_with("drop ")
         || lower.starts_with("alter ")

@@ -369,31 +369,40 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    /// Parse: PUT key = value [EXPIRE duration] [IF NOT EXISTS]
+    /// Parse: PUT key = value [EXPIRE duration] [TAGS [tag, ...]] [IF NOT EXISTS]
     pub fn parse_kv_put_query(&mut self) -> Result<QueryExpr, ParseError> {
         self.expect_ident_ci("PUT")?;
         let key = self.parse_kv_key()?;
         self.expect(Token::Eq)?;
         let value = self.parse_expr_value()?;
 
-        let ttl_ms = if self.consume_ident_ci("EXPIRE")? {
-            Some(self.parse_ttl_duration()?)
-        } else {
-            None
-        };
+        let mut ttl_ms = None;
+        let mut tags = Vec::new();
+        let mut if_not_exists = false;
 
-        let if_not_exists = if self.consume(&Token::If)? {
-            self.expect(Token::Not)?;
-            self.expect(Token::Exists)?;
-            true
-        } else {
-            false
-        };
+        while !matches!(self.peek(), Token::Eof | Token::Semi) {
+            if self.consume_ident_ci("EXPIRE")? {
+                ttl_ms = Some(self.parse_ttl_duration()?);
+            } else if self.consume_ident_ci("TAGS")? {
+                tags = self.parse_kv_tags_list()?;
+            } else if self.consume(&Token::If)? {
+                self.expect(Token::Not)?;
+                self.expect(Token::Exists)?;
+                if_not_exists = true;
+            } else {
+                return Err(ParseError::expected(
+                    vec!["EXPIRE", "TAGS", "IF NOT EXISTS"],
+                    self.peek(),
+                    self.position(),
+                ));
+            }
+        }
 
         Ok(QueryExpr::Kv(KvQuery::Put {
             key,
             value,
             ttl_ms,
+            tags,
             if_not_exists,
         }))
     }
@@ -424,6 +433,16 @@ impl<'a> Parser<'a> {
         self.expect_ident_ci("DECR")?;
         let key = self.parse_kv_key()?;
         self.parse_kv_counter_tail(key, -1)
+    }
+
+    /// Parse: INVALIDATE TAGS [tag, ...] FROM collection
+    pub fn parse_kv_invalidate_tags_query(&mut self) -> Result<QueryExpr, ParseError> {
+        self.expect_ident_ci("INVALIDATE")?;
+        self.expect_ident_ci("TAGS")?;
+        let tags = self.parse_kv_tags_list()?;
+        self.expect(Token::From)?;
+        let collection = self.expect_ident_or_keyword()?;
+        Ok(QueryExpr::Kv(KvQuery::InvalidateTags { collection, tags }))
     }
 
     fn parse_kv_counter_tail(
@@ -492,6 +511,39 @@ impl<'a> Parser<'a> {
                 Ok(part.to_string())
             }
             _ => self.expect_ident_or_keyword(),
+        }
+    }
+
+    fn parse_kv_tags_list(&mut self) -> Result<Vec<String>, ParseError> {
+        self.expect(Token::LBracket)?;
+        let mut tags = Vec::new();
+        if !self.check(&Token::RBracket) {
+            loop {
+                tags.push(self.parse_kv_tag()?);
+                if !self.consume(&Token::Comma)? {
+                    break;
+                }
+            }
+        }
+        self.expect(Token::RBracket)?;
+        Ok(tags)
+    }
+
+    fn parse_kv_tag(&mut self) -> Result<String, ParseError> {
+        match self.peek().clone() {
+            Token::Ident(tag) | Token::String(tag) => {
+                self.advance()?;
+                Ok(tag)
+            }
+            Token::Integer(tag) => {
+                self.advance()?;
+                Ok(tag.to_string())
+            }
+            other => Err(ParseError::expected(
+                vec!["tag identifier or string"],
+                &other,
+                self.position(),
+            )),
         }
     }
 

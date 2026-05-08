@@ -41,11 +41,15 @@ impl<'a> KvAtomicOps<'a> {
                 key,
                 value,
                 ttl_ms,
+                tags,
                 if_not_exists,
-            } => self.set(raw_query, key, value.clone(), *ttl_ms, *if_not_exists),
+            } => self.set(raw_query, key, value.clone(), *ttl_ms, tags, *if_not_exists),
             KvQuery::Get { key } => self.get(raw_query, key),
             KvQuery::Delete { key } => self.delete(raw_query, key),
             KvQuery::Incr { key, by, ttl_ms } => self.incr_query(raw_query, key, *by, *ttl_ms),
+            KvQuery::InvalidateTags { collection, tags } => {
+                self.invalidate_tags(raw_query, collection, tags)
+            }
         }
     }
 
@@ -55,6 +59,7 @@ impl<'a> KvAtomicOps<'a> {
         key: &str,
         value: Value,
         ttl_ms: Option<u64>,
+        tags: &[String],
         if_not_exists: bool,
     ) -> RedDBResult<RuntimeQueryResult> {
         self.runtime
@@ -84,6 +89,12 @@ impl<'a> KvAtomicOps<'a> {
                 },
             ));
         }
+        if !tags.is_empty() {
+            metadata.push((
+                "_kv_tags".to_string(),
+                MetadataValue::Array(tags.iter().cloned().map(MetadataValue::String).collect()),
+            ));
+        }
 
         self.runtime.create_kv(CreateKvInput {
             collection: target.collection.clone(),
@@ -91,7 +102,8 @@ impl<'a> KvAtomicOps<'a> {
             value,
             metadata,
         })?;
-        self.runtime.kv_clear_deleted(&target.collection, &target.key);
+        self.runtime
+            .kv_clear_deleted(&target.collection, &target.key);
         self.runtime.note_table_write(&target.collection);
 
         Ok(RuntimeQueryResult::dml_result(
@@ -128,12 +140,70 @@ impl<'a> KvAtomicOps<'a> {
         let target = self.resolve_target(key, false);
         let affected = if let Some(entry) = self.find_live_entry(&target)? {
             self.delete_entity(&target.collection, entry.id)?;
-            self.runtime.kv_mark_deleted(&target.collection, &target.key);
+            self.runtime
+                .kv_mark_deleted(&target.collection, &target.key);
             self.runtime.note_table_write(&target.collection);
             1
         } else {
             0
         };
+        Ok(RuntimeQueryResult::dml_result(
+            raw_query.to_string(),
+            affected,
+            "delete",
+            "runtime-kv",
+        ))
+    }
+
+    pub fn invalidate_tags(
+        &self,
+        raw_query: &str,
+        collection: &str,
+        tags: &[String],
+    ) -> RedDBResult<RuntimeQueryResult> {
+        self.runtime
+            .check_write(crate::runtime::write_gate::WriteKind::Dml)?;
+        let store = self.runtime.db().store();
+        let Some(manager) = store.get_collection(collection) else {
+            return Ok(RuntimeQueryResult::dml_result(
+                raw_query.to_string(),
+                0,
+                "delete",
+                "runtime-kv",
+            ));
+        };
+
+        let mut to_delete = Vec::new();
+        for entity in manager.query_all(|_| true) {
+            if manager.get(entity.id).is_none() || self.is_expired(collection, &entity) {
+                continue;
+            }
+            let EntityData::Row(row) = &entity.data else {
+                continue;
+            };
+            let Some(Value::Text(key)) = row.get_field("key") else {
+                continue;
+            };
+            if self.runtime.kv_is_deleted(collection, key.as_ref()) {
+                continue;
+            }
+            let Some(metadata) = store.get_metadata(collection, entity.id) else {
+                continue;
+            };
+            if metadata_tags_intersect(metadata.get("_kv_tags"), tags) {
+                to_delete.push((entity.id, key.to_string()));
+            }
+        }
+
+        let affected = to_delete.len() as u64;
+        for (id, key) in to_delete {
+            self.delete_entity(collection, id)?;
+            self.runtime.kv_mark_deleted(collection, &key);
+        }
+        if affected > 0 {
+            self.runtime.note_table_write(collection);
+        }
+
         Ok(RuntimeQueryResult::dml_result(
             raw_query.to_string(),
             affected,
@@ -466,6 +536,20 @@ fn metadata_u64(value: &MetadataValue) -> Option<u64> {
     }
 }
 
+fn metadata_tags_intersect(value: Option<&MetadataValue>, tags: &[String]) -> bool {
+    let Some(value) = value else {
+        return false;
+    };
+    match value {
+        MetadataValue::String(tag) => tags.iter().any(|wanted| wanted == tag),
+        MetadataValue::Array(stored) => stored.iter().any(|stored| match stored {
+            MetadataValue::String(tag) => tags.iter().any(|wanted| wanted == tag),
+            _ => false,
+        }),
+        _ => false,
+    }
+}
+
 fn current_unix_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -589,6 +673,33 @@ mod tests {
         assert_eq!(
             got.result.records[0].get("value"),
             Some(&Value::text("nope"))
+        );
+    }
+
+    #[test]
+    fn invalidate_tags_deletes_matching_kv_entries() {
+        let rt = RedDBRuntime::with_options(RedDBOptions::in_memory()).unwrap();
+        rt.db().store().get_or_create_collection("sessions");
+
+        rt.execute_query("PUT sessions.a = 'one' TAGS [user, active]")
+            .unwrap();
+        rt.execute_query("PUT sessions.b = 'two' TAGS [admin]")
+            .unwrap();
+        rt.execute_query("PUT sessions.c = 'three'").unwrap();
+
+        let invalidated = rt
+            .execute_query("INVALIDATE TAGS [active] FROM sessions")
+            .unwrap();
+        assert_eq!(invalidated.affected_rows, 1);
+
+        let a = rt.execute_query("GET sessions.a").unwrap();
+        assert!(a.result.records.is_empty());
+        let b = rt.execute_query("GET sessions.b").unwrap();
+        assert_eq!(b.result.records[0].get("value"), Some(&Value::text("two")));
+        let c = rt.execute_query("GET sessions.c").unwrap();
+        assert_eq!(
+            c.result.records[0].get("value"),
+            Some(&Value::text("three"))
         );
     }
 

@@ -1196,12 +1196,14 @@ fn test_parse_top_level_kv_put_get_delete() {
         key,
         value,
         ttl_ms,
+        tags,
         if_not_exists,
     }) = query
     {
         assert_eq!(key, "session");
         assert_eq!(value, crate::storage::schema::Value::text("abc"));
         assert_eq!(ttl_ms, Some(120_000));
+        assert!(tags.is_empty());
         assert!(if_not_exists);
     } else {
         panic!("Expected Kv Put");
@@ -1237,6 +1239,31 @@ fn test_parse_top_level_kv_put_get_delete() {
         assert_eq!(ttl_ms, None);
     } else {
         panic!("Expected Kv Decr");
+    }
+}
+
+#[test]
+fn test_parse_top_level_kv_tags() {
+    let query = parse("PUT sessions.42 = 'abc' TAGS [user, 'session'] EXPIRE 5 s").unwrap();
+    if let QueryExpr::Kv(crate::storage::query::ast::KvQuery::Put {
+        key, tags, ttl_ms, ..
+    }) = query
+    {
+        assert_eq!(key, "sessions.42");
+        assert_eq!(tags, vec!["user".to_string(), "session".to_string()]);
+        assert_eq!(ttl_ms, Some(5_000));
+    } else {
+        panic!("Expected Kv Put");
+    }
+
+    let query = parse("INVALIDATE TAGS [user, session] FROM sessions").unwrap();
+    if let QueryExpr::Kv(crate::storage::query::ast::KvQuery::InvalidateTags { collection, tags }) =
+        query
+    {
+        assert_eq!(collection, "sessions");
+        assert_eq!(tags, vec!["user".to_string(), "session".to_string()]);
+    } else {
+        panic!("Expected Kv tag invalidation");
     }
 }
 
