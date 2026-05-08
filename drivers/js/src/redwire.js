@@ -233,6 +233,7 @@ export class RedWireClient {
     if (method === 'kv.delete') return this.#query(kvDeleteSql(params))
     if (method === 'kv.incr') return this.#query(kvIncrSql(params))
     if (method === 'kv.decr') return this.#query(kvDecrSql(params))
+    if (method === 'kv.invalidate_tags') return this.#query(kvInvalidateTagsSql(params))
     if (method === 'health' || method === 'version') return this.#ping()
     throw new RedDBError(
       'UNKNOWN_METHOD',
@@ -365,7 +366,14 @@ export class RedWireClient {
   }
 }
 
-function kvPutSql({ collection, key, value }) {
+function kvPutSql({ collection, key, value, tags = [], ttlMs, ifNotExists = false }) {
+  if ((Array.isArray(tags) && tags.length > 0) || ttlMs !== undefined || ifNotExists) {
+    const parts = [`PUT ${kvKey(collection, key)} = ${sqlLiteral(value)}`]
+    if (ttlMs !== undefined && ttlMs !== null) parts.push(`EXPIRE ${Number(ttlMs)} ms`)
+    if (Array.isArray(tags) && tags.length > 0) parts.push(`TAGS [${tags.map(sqlLiteral).join(', ')}]`)
+    if (ifNotExists) parts.push('IF NOT EXISTS')
+    return parts.join(' ')
+  }
   return `INSERT INTO ${sqlIdent(collection)} KV (key, value) VALUES (${sqlLiteral(String(key))}, ${sqlLiteral(value)})`
 }
 
@@ -383,6 +391,14 @@ function kvIncrSql({ collection, key, by = 1, ttlMs }) {
 
 function kvDecrSql({ collection, key, by = 1, ttlMs }) {
   return kvCounterSql('DECR', collection, key, by, ttlMs)
+}
+
+function kvInvalidateTagsSql({ collection, tags = [] }) {
+  return `INVALIDATE TAGS [${tags.map(sqlLiteral).join(', ')}] FROM ${sqlIdent(collection)}`
+}
+
+function kvKey(collection, key) {
+  return `${sqlLiteral(String(collection))}.${sqlLiteral(String(key))}`
 }
 
 function kvCounterSql(op, collection, key, by, ttlMs) {

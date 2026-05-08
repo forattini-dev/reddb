@@ -112,11 +112,18 @@ const custom = await connect('memory://', { binary: '/usr/local/bin/red' })
 
 ### `db.delete(collection, id) → Promise<{ affected }>`
 
-### `db.kv.put(collection, key, value) → Promise<object>`
+### `db.kv.put(collection, key, value, opts?) → Promise<object>`
+
+`opts.tags`, `opts.ttlMs`, and `opts.ifNotExists` map to the TAGS runtime
+surface via `PUT <collection>.<key> = <value> ...`.
 
 ### `db.kv.get(collection, key) → Promise<{ value }>`
 
 ### `db.kv.delete(collection, key) → Promise<object>`
+
+### `db.kv.invalidateTags(collection, tags) → Promise<object>`
+
+Deletes KV entries in `collection` that have any of the supplied runtime tags.
 
 HTTP connections target `PUT|GET|DELETE /collections/<collection>/kv/<key>`.
 For compatibility with current servers, the driver falls back to the legacy

@@ -90,6 +90,8 @@ from reddb_asyncio import (
 * `await db.bulk_insert(collection, payloads)`
 * `await db.get(collection, id)`
 * `await db.delete(collection, id)`
+* `await db.kv.put(collection, key, value, tags=[...], ttl_ms=..., if_not_exists=True)`
+* `await db.kv.invalidate_tags(collection, tags)`
 * `await db.ping()`
 * `await db.close()`
 * `async with await connect(uri) as db: ...`

@@ -60,6 +60,18 @@ export interface KvCounterResult {
   key?: string
   value: number
 }
+
+export interface KvPutOptions {
+  tags?: string[]
+  ttlMs?: number
+  ifNotExists?: boolean
+}
+
+export interface KvInvalidateTagsResult {
+  affected?: number
+  affected_rows?: number
+  ok?: boolean
+}
 export interface HealthResult { ok: boolean; version: string }
 export interface VersionResult { version: string; protocol: string }
 
@@ -116,11 +128,12 @@ export class CacheClient {
 }
 
 export class KvClient {
-  put(collection: string, key: string | number, value: unknown): Promise<KvPutResult>
+  put(collection: string, key: string | number, value: unknown, opts?: KvPutOptions): Promise<KvPutResult>
   get(collection: string, key: string | number): Promise<KvGetResult>
   delete(collection: string, key: string | number): Promise<KvDeleteResult>
   incr(collection: string, key: string | number, by?: number, ttlMs?: number): Promise<KvCounterResult>
   decr(collection: string, key: string | number, by?: number, ttlMs?: number): Promise<KvCounterResult>
+  invalidateTags(collection: string, tags: string[]): Promise<KvInvalidateTagsResult>
 }
 
 /**

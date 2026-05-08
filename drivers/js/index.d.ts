@@ -100,6 +100,18 @@ export interface KvCounterResult {
   value: number
 }
 
+export interface KvPutOptions {
+  tags?: string[]
+  ttlMs?: number
+  ifNotExists?: boolean
+}
+
+export interface KvInvalidateTagsResult {
+  affected?: number
+  affected_rows?: number
+  ok?: boolean
+}
+
 export interface HealthResult {
   ok: boolean
   version: string
@@ -198,7 +210,7 @@ export class CacheClient {
 
 export class KvClient {
   /** Store or replace a key in a collection. */
-  put(collection: string, key: string | number, value: unknown): Promise<KvPutResult>
+  put(collection: string, key: string | number, value: unknown, opts?: KvPutOptions): Promise<KvPutResult>
   /** Fetch a key from a collection. */
   get(collection: string, key: string | number): Promise<KvGetResult>
   /** Delete a key from a collection. */
@@ -207,6 +219,8 @@ export class KvClient {
   incr(collection: string, key: string | number, by?: number, ttlMs?: number): Promise<KvCounterResult>
   /** Atomically decrement an integer key and return the new value. */
   decr(collection: string, key: string | number, by?: number, ttlMs?: number): Promise<KvCounterResult>
+  /** Delete KV entries in a collection tagged with any of the supplied tags. */
+  invalidateTags(collection: string, tags: string[]): Promise<KvInvalidateTagsResult>
 }
 
 export class RedDB {

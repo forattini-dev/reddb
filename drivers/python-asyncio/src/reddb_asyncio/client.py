@@ -134,8 +134,24 @@ class _RedwireAdapter:
     async def delete(self, collection: str, doc_id: str) -> dict[str, Any]:
         return await self._client.delete(collection, doc_id)
 
-    async def kv_put(self, collection: str, key: str, value: Any) -> dict[str, Any]:
-        return await self._client.kv_put(collection, key, value)
+    async def kv_put(
+        self,
+        collection: str,
+        key: str,
+        value: Any,
+        *,
+        tags: list[str] | None = None,
+        ttl_ms: int | None = None,
+        if_not_exists: bool = False,
+    ) -> dict[str, Any]:
+        return await self._client.kv_put(
+            collection,
+            key,
+            value,
+            tags=tags,
+            ttl_ms=ttl_ms,
+            if_not_exists=if_not_exists,
+        )
 
     async def kv_get(self, collection: str, key: str) -> dict[str, Any]:
         return await self._client.kv_get(collection, key)
@@ -152,6 +168,9 @@ class _RedwireAdapter:
         self, collection: str, key: str, by: int = 1, ttl_ms: int | None = None
     ) -> dict[str, Any]:
         return await self._client.kv_decr(collection, key, by, ttl_ms)
+
+    async def kv_invalidate_tags(self, collection: str, tags: list[str]) -> dict[str, Any]:
+        return await self._client.kv_invalidate_tags(collection, tags)
 
     async def ping(self) -> dict[str, Any]:
         await self._client.ping()
@@ -220,8 +239,24 @@ class KvClient:
     def __init__(self, transport: Any) -> None:
         self._t = transport
 
-    async def put(self, collection: str, key: str, value: Any) -> dict[str, Any]:
-        return await self._t.kv_put(collection, str(key), value)
+    async def put(
+        self,
+        collection: str,
+        key: str,
+        value: Any,
+        *,
+        tags: list[str] | None = None,
+        ttl_ms: int | None = None,
+        if_not_exists: bool = False,
+    ) -> dict[str, Any]:
+        return await self._t.kv_put(
+            collection,
+            str(key),
+            value,
+            tags=tags,
+            ttl_ms=ttl_ms,
+            if_not_exists=if_not_exists,
+        )
 
     async def get(self, collection: str, key: str) -> dict[str, Any]:
         return await self._t.kv_get(collection, str(key))
@@ -238,3 +273,6 @@ class KvClient:
         self, collection: str, key: str, by: int = 1, ttl_ms: int | None = None
     ) -> dict[str, Any]:
         return await self._t.kv_decr(collection, str(key), by, ttl_ms)
+
+    async def invalidate_tags(self, collection: str, tags: list[str]) -> dict[str, Any]:
+        return await self._t.kv_invalidate_tags(collection, tags)

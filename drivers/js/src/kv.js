@@ -1,5 +1,5 @@
 /**
- * KV client — exposes `kv.{put,get,delete,incr,decr}` through the underlying transport.
+ * KV client — exposes `kv.{put,get,delete,incr,decr,invalidateTags}` through the underlying transport.
  *
  * HTTP uses the REST KV endpoint. RedWire/stdio transports may bridge the
  * same method names directly or fall back to SQL while dedicated wire frames
@@ -17,10 +17,11 @@ export class KvClient {
    * @param {string} collection
    * @param {string | number} key
    * @param {unknown} value
+   * @param {{ tags?: string[], ttlMs?: number, ifNotExists?: boolean }} [opts]
    * @returns {Promise<object>}
    */
-  async put(collection, key, value) {
-    return await this._client.call('kv.put', { collection, key: String(key), value })
+  async put(collection, key, value, opts = {}) {
+    return await this._client.call('kv.put', { collection, key: String(key), value, ...opts })
   }
 
   /**
@@ -65,5 +66,15 @@ export class KvClient {
    */
   async decr(collection, key, by = 1, ttlMs = undefined) {
     return await this._client.call('kv.decr', { collection, key: String(key), by, ttlMs })
+  }
+
+  /**
+   * Delete every KV entry in a collection tagged with any of the supplied tags.
+   * @param {string} collection
+   * @param {string[]} tags
+   * @returns {Promise<object>}
+   */
+  async invalidateTags(collection, tags) {
+    return await this._client.call('kv.invalidate_tags', { collection, tags })
   }
 }

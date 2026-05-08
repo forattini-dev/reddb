@@ -19,6 +19,7 @@ Method                      Endpoint
 ``get``                     ``GET  /collections/{name}/{id}``
 ``delete``                  ``DELETE /collections/{name}/{id}``
 ``kv_put``                  ``PUT  /collections/{name}/kv/{key}`` (fallback ``/kvs/{key}``)
+                            tag/TTL options route through ``POST /query``
 ``kv_get``                  ``GET  /collections/{name}/kv/{key}`` (fallback ``/kvs/{key}``)
 ``kv_delete``               ``DELETE /collections/{name}/kv/{key}`` (fallback ``/kvs/{key}``)
 ``ping`` / health           ``GET  /health``
@@ -112,7 +113,27 @@ class HttpClient:
         url = f"/collections/{quote(collection)}/{quote(str(doc_id))}"
         return await self._request("DELETE", url)
 
-    async def kv_put(self, collection: str, key: str, value: Any) -> dict[str, Any]:
+    async def kv_put(
+        self,
+        collection: str,
+        key: str,
+        value: Any,
+        *,
+        tags: list[str] | None = None,
+        ttl_ms: int | None = None,
+        if_not_exists: bool = False,
+    ) -> dict[str, Any]:
+        if tags or ttl_ms is not None or if_not_exists:
+            return await self.query(
+                _kv_put_sql(
+                    collection,
+                    key,
+                    value,
+                    tags=tags,
+                    ttl_ms=ttl_ms,
+                    if_not_exists=if_not_exists,
+                )
+            )
         return await self._request_with_legacy_kv(
             "PUT",
             collection,
@@ -135,6 +156,9 @@ class HttpClient:
         self, collection: str, key: str, by: int = 1, ttl_ms: int | None = None
     ) -> dict[str, Any]:
         return await self._request_kv_counter("decr", collection, key, by, ttl_ms)
+
+    async def kv_invalidate_tags(self, collection: str, tags: list[str]) -> dict[str, Any]:
+        return await self.query(_kv_invalidate_tags_sql(collection, tags))
 
     async def scan(self, collection: str, **params: Any) -> dict[str, Any]:
         url = f"/collections/{quote(collection)}/scan"
@@ -259,6 +283,57 @@ def _parse_response(response: httpx.Response) -> Any:
             )
         return parsed.get("result", parsed)
     return parsed
+
+
+def _kv_put_sql(
+    collection: str,
+    key: str,
+    value: Any,
+    *,
+    tags: list[str] | None = None,
+    ttl_ms: int | None = None,
+    if_not_exists: bool = False,
+) -> str:
+    parts = [f"PUT {_kv_key(collection, key)} = {_sql_literal(value)}"]
+    if ttl_ms is not None:
+        parts.append(f"EXPIRE {int(ttl_ms)} ms")
+    if tags:
+        parts.append("TAGS [" + ", ".join(_sql_literal(tag) for tag in tags) + "]")
+    if if_not_exists:
+        parts.append("IF NOT EXISTS")
+    return " ".join(parts)
+
+
+def _kv_invalidate_tags_sql(collection: str, tags: list[str]) -> str:
+    return (
+        "INVALIDATE TAGS ["
+        + ", ".join(_sql_literal(tag) for tag in tags)
+        + f"] FROM {_sql_ident(collection)}"
+    )
+
+
+def _kv_key(collection: str, key: str) -> str:
+    return f"{_sql_literal(collection)}.{_sql_literal(str(key))}"
+
+
+def _sql_ident(value: str) -> str:
+    if value.replace("_", "a").isalnum() and not value[:1].isdigit():
+        return value
+    return '"' + value.replace('"', '""') + '"'
+
+
+def _sql_literal(value: Any) -> str:
+    if value is None:
+        return "NULL"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, (dict, list)):
+        import json
+
+        value = json.dumps(value, separators=(",", ":"))
+    return "'" + str(value).replace("'", "''") + "'"
 
 
 __all__ = ["HttpClient", "DEFAULT_TIMEOUT_SECS"]

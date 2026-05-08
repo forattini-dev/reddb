@@ -15,6 +15,7 @@
  *   get                 → GET  /collections/:name/{id}      (entity scan + filter)
  *   delete              → DELETE /collections/:name/{id}
  *   kv.put              → PUT    /collections/:name/kv/:key  (fallback: /kvs/:key)
+ *                          tag/TTL options route through POST /query
  *   kv.get              → GET    /collections/:name/kv/:key  (fallback: /kvs/:key)
  *   kv.delete           → DELETE /collections/:name/kv/:key  (fallback: /kvs/:key)
  *   kv.incr             → POST   /collections/:name/kv/:key/incr?by=n
@@ -151,11 +152,7 @@ const ROUTES = {
     url: `${base}/collections/${encodeURIComponent(collection)}/${encodeURIComponent(id)}`,
     init: { method: 'DELETE' },
   }),
-  'kv.put': (base, { collection, key, value }) => ({
-    url: `${base}/collections/${encodeURIComponent(collection)}/kv/${encodeURIComponent(key)}`,
-    legacyUrl: `${base}/collections/${encodeURIComponent(collection)}/kvs/${encodeURIComponent(key)}`,
-    init: { method: 'PUT', body: JSON.stringify({ value }) },
-  }),
+  'kv.put': (base, params) => kvPutRoute(base, params),
   'kv.get': (base, { collection, key }) => ({
     url: `${base}/collections/${encodeURIComponent(collection)}/kv/${encodeURIComponent(key)}`,
     legacyUrl: `${base}/collections/${encodeURIComponent(collection)}/kvs/${encodeURIComponent(key)}`,
@@ -173,6 +170,10 @@ const ROUTES = {
   'kv.decr': (base, params) => ({
     url: kvCounterUrl(base, params, 'decr'),
     init: { method: 'POST' },
+  }),
+  'kv.invalidate_tags': (base, params) => ({
+    url: `${base}/query`,
+    init: { method: 'POST', body: JSON.stringify({ query: kvInvalidateTagsSql(params) }) },
   }),
   'auth.login': (base, { username, password }) => ({
     url: `${base}/auth/login`,
@@ -235,4 +236,52 @@ function kvCounterUrl(base, { collection, key, by = 1, ttlMs }, op) {
   query.set('by', String(by))
   if (ttlMs !== undefined && ttlMs !== null) query.set('ttl_ms', String(ttlMs))
   return `${base}/collections/${encodeURIComponent(collection)}/kv/${encodeURIComponent(key)}/${op}?${query.toString()}`
+}
+
+function kvPutRoute(base, params) {
+  const { collection, key, value, tags, ttlMs, ifNotExists } = params
+  if ((Array.isArray(tags) && tags.length > 0) || ttlMs !== undefined || ifNotExists) {
+    return {
+      url: `${base}/query`,
+      init: { method: 'POST', body: JSON.stringify({ query: kvPutSql(params) }) },
+    }
+  }
+  return {
+    url: `${base}/collections/${encodeURIComponent(collection)}/kv/${encodeURIComponent(key)}`,
+    legacyUrl: `${base}/collections/${encodeURIComponent(collection)}/kvs/${encodeURIComponent(key)}`,
+    init: { method: 'PUT', body: JSON.stringify({ value }) },
+  }
+}
+
+function kvPutSql({ collection, key, value, tags = [], ttlMs, ifNotExists = false }) {
+  const parts = [`PUT ${kvKey(collection, key)} = ${sqlLiteral(value)}`]
+  if (ttlMs !== undefined && ttlMs !== null) parts.push(`EXPIRE ${Number(ttlMs)} ms`)
+  if (Array.isArray(tags) && tags.length > 0) parts.push(`TAGS [${tags.map(sqlLiteral).join(', ')}]`)
+  if (ifNotExists) parts.push('IF NOT EXISTS')
+  return parts.join(' ')
+}
+
+function kvInvalidateTagsSql({ collection, tags = [] }) {
+  return `INVALIDATE TAGS [${tags.map(sqlLiteral).join(', ')}] FROM ${sqlIdent(collection)}`
+}
+
+function kvKey(collection, key) {
+  return `${sqlLiteral(String(collection))}.${sqlLiteral(String(key))}`
+}
+
+function sqlIdent(value) {
+  const s = String(value)
+  if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(s)) return s
+  return `"${s.replaceAll('"', '""')}"`
+}
+
+function sqlLiteral(value) {
+  if (value == null) return 'NULL'
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) throw new TypeError('KV numeric value must be finite')
+    return String(value)
+  }
+  if (typeof value === 'boolean') return value ? 'true' : 'false'
+  if (typeof value === 'object') return `'${JSON.stringify(value).replaceAll("'", "''")}'`
+  return `'${String(value).replaceAll("'", "''")}'`
 }

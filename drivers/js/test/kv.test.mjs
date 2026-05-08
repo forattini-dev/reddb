@@ -7,7 +7,8 @@ import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
 
-import { connect } from '../src/index.js'
+import { HttpRpcClient } from '../src/http.js'
+import { KvClient } from '../src/kv.js'
 
 async function startMockServer(handlers) {
   const server = createServer(async (req, res) => {
@@ -43,6 +44,10 @@ async function startMockServer(handlers) {
   }
 }
 
+function createKv(baseUrl) {
+  return new KvClient(new HttpRpcClient({ baseUrl }))
+}
+
 test('kv.put/get/delete use canonical /kv endpoint', async () => {
   const seen = []
   const stub = await startMockServer({
@@ -61,11 +66,11 @@ test('kv.put/get/delete use canonical /kv endpoint', async () => {
     'DELETE /collections/app/kv/theme': () => ({ ok: true, deleted: true, key: 'theme' }),
   })
   try {
-    const db = await connect(stub.baseUrl)
-    assert.deepEqual(await db.kv.put('app', 'theme', 'dark'), { ok: true, id: 7, key: 'theme' })
+    const kv = createKv(stub.baseUrl)
+    assert.deepEqual(await kv.put('app', 'theme', 'dark'), { ok: true, id: 7, key: 'theme' })
     assert.deepEqual(seen[0], { value: 'dark' })
-    assert.equal((await db.kv.get('app', 'theme')).value, 'dark')
-    assert.deepEqual(await db.kv.delete('app', 'theme'), { ok: true, deleted: true, key: 'theme' })
+    assert.equal((await kv.get('app', 'theme')).value, 'dark')
+    assert.deepEqual(await kv.delete('app', 'theme'), { ok: true, deleted: true, key: 'theme' })
   } finally {
     await stub.close()
   }
@@ -82,10 +87,56 @@ test('kv HTTP route falls back to legacy /kvs endpoint on 404', async () => {
     },
   })
   try {
-    const db = await connect(stub.baseUrl)
-    const out = await db.kv.put('app', 'theme', 'dark')
+    const kv = createKv(stub.baseUrl)
+    const out = await kv.put('app', 'theme', 'dark')
     assert.equal(out.id, 9)
     assert.deepEqual(requests, ['PUT /collections/app/kv/theme'])
+  } finally {
+    await stub.close()
+  }
+})
+
+test('kv.put with tags routes through query SQL', async () => {
+  const queries = []
+  const stub = await startMockServer({
+    'GET /health': () => ({ ok: true, version: 'mock' }),
+    'POST /query': (body) => {
+      queries.push(body.query)
+      return { ok: true, result: { affected: 1 } }
+    },
+  })
+  try {
+    const kv = createKv(stub.baseUrl)
+    const out = await kv.put('sessions', 'user:1', { role: 'admin' }, {
+      tags: ['tenant:1', "vip'user"],
+      ttlMs: 5000,
+      ifNotExists: true,
+    })
+    assert.deepEqual(out, { affected: 1 })
+    assert.deepEqual(queries, [
+      "PUT 'sessions'.'user:1' = '{\"role\":\"admin\"}' EXPIRE 5000 ms TAGS ['tenant:1', 'vip''user'] IF NOT EXISTS",
+    ])
+  } finally {
+    await stub.close()
+  }
+})
+
+test('kv.invalidateTags routes through query SQL', async () => {
+  const queries = []
+  const stub = await startMockServer({
+    'GET /health': () => ({ ok: true, version: 'mock' }),
+    'POST /query': (body) => {
+      queries.push(body.query)
+      return { ok: true, result: { affected: 2 } }
+    },
+  })
+  try {
+    const kv = createKv(stub.baseUrl)
+    const out = await kv.invalidateTags('sessions', ['active', 'tenant:1'])
+    assert.deepEqual(out, { affected: 2 })
+    assert.deepEqual(queries, [
+      "INVALIDATE TAGS ['active', 'tenant:1'] FROM sessions",
+    ])
   } finally {
     await stub.close()
   }
