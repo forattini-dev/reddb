@@ -177,10 +177,14 @@ Native JS → engine type mapping (see `encodeValue` in
 | `bigint`                                      | Int (i64)          |
 | `number` (integer, safe range)                | Int (i64)          |
 | `number` (otherwise)                          | Float (f64)        |
+| `number` (`NaN`, `Infinity`, `-Infinity`)     | Float via `$float` |
 | `string`                                      | Text               |
+| canonical UUID string                         | Uuid               |
 | `Uint8Array` / `Buffer`                       | Bytes              |
+| `Date`                                        | Timestamp (secs)   |
 | `Float32Array`, `Float64Array`, `number[]`    | Vector (f32)       |
 | `{ $bytes: '<base64>' }`                      | Bytes (envelope)   |
+| `{ $float: 'NaN' | 'Infinity' | '-Infinity' }` | Float (envelope)   |
 | `{ $ts: <unix-seconds> }`                     | Timestamp          |
 | `{ $uuid: '<hyphenated>' }`                   | Uuid               |
 | plain object / array                          | Json (canonical)   |

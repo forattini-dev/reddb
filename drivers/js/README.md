@@ -102,7 +102,14 @@ const persisted = await connect('file:///tmp/app.rdb')
 const custom = await connect('memory://', { binary: '/usr/local/bin/red' })
 ```
 
-### `db.query(sql) → Promise<{ statement, affected, columns, rows }>`
+### `db.query(sql, params?) → Promise<{ statement, affected, columns, rows }>`
+
+`params` binds positional `$N` placeholders. Native values map to typed engine
+values: `null` / `undefined`, booleans, integer and floating-point numbers,
+`bigint`, text, `Uint8Array` / `Buffer` bytes, `Float32Array` /
+`Float64Array` / `number[]` vectors, `Date` timestamps, canonical UUID strings,
+plain objects/arrays as JSON, plus explicit `{ $bytes }`, `{ $ts }`, `{ $uuid }`
+and non-finite float `{ $float }` envelopes.
 
 ### `db.insert(collection, payload) → Promise<{ affected, id? }>`
 

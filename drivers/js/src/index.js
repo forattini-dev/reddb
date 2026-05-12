@@ -168,14 +168,45 @@ export async function connect(uri, options = {}) {
 }
 
 // Coerce a JS query parameter to a JSON-serializable shape the server
-// understands. The tracer scope (#355) lifts vector params: `Float32Array`
-// and `Float64Array` round-trip as plain JSON arrays of numbers, which
-// the embedded stdio handler maps to `Value::Vector`.
+// understands. Keeps the embedded JSON-RPC path on the same typed
+// envelope contract as HTTP params and RedWire QueryWithParams.
 function serializeParam(value) {
+  if (value === null || value === undefined) return null
+  if (typeof value === 'number' && !Number.isFinite(value)) {
+    if (Number.isNaN(value)) return { $float: 'NaN' }
+    return { $float: value < 0 ? '-Infinity' : 'Infinity' }
+  }
+  if (typeof value === 'bigint') return Number(value)
+  if (value instanceof Date) {
+    return { $ts: Math.trunc(value.getTime() / 1000) }
+  }
+  if (value instanceof Uint8Array) {
+    return { $bytes: bytesToBase64(value) }
+  }
+  if (typeof Buffer !== 'undefined' && value instanceof Buffer) {
+    return { $bytes: bytesToBase64(new Uint8Array(value.buffer, value.byteOffset, value.byteLength)) }
+  }
   if (value instanceof Float32Array || value instanceof Float64Array) {
     return Array.from(value)
   }
+  if (typeof value === 'string' && isHyphenatedUuid(value)) {
+    return { $uuid: value }
+  }
   return value
+}
+
+function bytesToBase64(bytes) {
+  if (typeof Buffer !== 'undefined') {
+    return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString('base64')
+  }
+  let bin = ''
+  for (const byte of bytes) bin += String.fromCharCode(byte)
+  // eslint-disable-next-line no-undef
+  return btoa(bin)
+}
+
+function isHyphenatedUuid(value) {
+  return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(value)
 }
 
 function embeddedArgs(parsed) {
@@ -361,9 +392,8 @@ export class RedDB {
    * Two signatures:
    *   - `query(sql)` — legacy single-arg form.
    *   - `query(sql, params)` — positional `$N` bind values. `params` is
-   *     an array (JS scalars: number | string | null map to engine
-   *     int/float / text / null). Indices in the SQL are 1-based
-   *     (`$1`, `$2`, ...), `params` is 0-based JS-style.
+   *     an array of native JS values and typed envelopes. Indices in the
+   *     SQL are 1-based (`$1`, `$2`, ...), `params` is 0-based JS-style.
    *
    * Returns `{ statement, affected, columns, rows }`.
    */

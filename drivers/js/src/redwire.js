@@ -801,6 +801,7 @@ export function encodeQueryWithParams(sql, params) {
  *   - `Uint8Array` / `Buffer`            → Bytes
  *   - `Float32Array` / `Array<number>`   → Vector (f32)
  *   - `{ $bytes: <base64> }`             → Bytes
+ *   - `{ $float: "NaN"|"Infinity"|"-Infinity" }` → Float
  *   - `{ $ts: <unix-seconds> }`          → Timestamp
  *   - `{ $uuid: <hyphenated> }`          → Uuid
  *   - other plain object/array           → Json (canonical bytes)
@@ -843,6 +844,15 @@ export function encodeValue(v) {
       if (k === '$bytes' && typeof v.$bytes === 'string') {
         return encodeLenPrefixed(ValueTag.Bytes, base64ToBytes(v.$bytes))
       }
+      if (k === '$float' && typeof v.$float === 'string') {
+        const parsed = parseSpecialFloat(v.$float)
+        if (parsed != null) {
+          const out = new Uint8Array(1 + 8)
+          out[0] = ValueTag.Float
+          new DataView(out.buffer).setFloat64(1, parsed, true)
+          return out
+        }
+      }
       if (k === '$ts' && typeof v.$ts === 'number' && Number.isFinite(v.$ts)) {
         const out = new Uint8Array(1 + 8)
         out[0] = ValueTag.Timestamp
@@ -860,6 +870,14 @@ export function encodeValue(v) {
     return encodeLenPrefixed(ValueTag.Json, new TextEncoder().encode(canonicalJson(v)))
   }
   throw new RedDBError('UNSUPPORTED_PARAM', `cannot encode param of type ${typeof v}`)
+}
+
+function parseSpecialFloat(value) {
+  if (value === 'NaN') return NaN
+  if (value === 'Infinity') return Infinity
+  if (value === '-Infinity') return -Infinity
+  const parsed = Number(value)
+  return Number.isNaN(parsed) ? null : parsed
 }
 
 function encodeLenPrefixed(tag, bytes) {

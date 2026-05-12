@@ -52,6 +52,24 @@ export interface QueryResult {
   rows: Array<Record<string, unknown>>
 }
 
+export type QueryParam =
+  | null
+  | undefined
+  | boolean
+  | number
+  | bigint
+  | string
+  | Uint8Array
+  | Date
+  | Float32Array
+  | Float64Array
+  | QueryParam[]
+  | { $bytes: string }
+  | { $float: 'NaN' | 'Infinity' | '-Infinity' | string }
+  | { $ts: number | string }
+  | { $uuid: string }
+  | Record<string, unknown>
+
 export interface InsertResult {
   affected: number
   /** Present when the underlying engine surfaces the inserted entity id. */
@@ -224,7 +242,7 @@ export class RedDB {
   readonly vault: (collection?: string) => VaultClient
 
   query(sql: string): Promise<QueryResult>
-  query(sql: string, params: Array<number | string | null>): Promise<QueryResult>
+  query(sql: string, params: QueryParam[]): Promise<QueryResult>
   insert(collection: string, payload: Record<string, unknown>): Promise<InsertResult>
   bulkInsert(
     collection: string,

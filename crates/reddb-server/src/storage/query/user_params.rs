@@ -907,9 +907,11 @@ fn value_variant_name(value: &Value) -> &'static str {
         Value::Float(_) => "float",
         Value::Text(_) => "text",
         Value::Boolean(_) => "boolean",
+        Value::Timestamp(_) | Value::TimestampMs(_) => "timestamp",
         Value::Vector(_) => "vector",
         Value::Json(_) => "json",
         Value::Blob(_) => "bytes",
+        Value::Uuid(_) => "uuid",
         _ => "other",
     }
 }

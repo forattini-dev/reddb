@@ -69,6 +69,20 @@ test('encodeValue: non-integer number → Float (f64 LE)', () => {
   assert.equal(view.getFloat64(0, true), 3.14)
 })
 
+test('encodeValue: $float envelope preserves non-finite floats', () => {
+  for (const [token, expected] of [['NaN', NaN], ['Infinity', Infinity], ['-Infinity', -Infinity]]) {
+    const enc = encodeValue({ $float: token })
+    assert.equal(enc[0], ValueTag.Float)
+    const view = new DataView(enc.buffer, enc.byteOffset + 1, 8)
+    const actual = view.getFloat64(0, true)
+    if (Number.isNaN(expected)) {
+      assert(Number.isNaN(actual))
+    } else {
+      assert.equal(actual, expected)
+    }
+  }
+})
+
 test('encodeValue: text utf-8 with u32 LE length', () => {
   const enc = encodeValue('héllo')
   assert.equal(enc[0], ValueTag.Text)

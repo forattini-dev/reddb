@@ -1145,14 +1145,19 @@ fn schema_value_to_json(v: &SchemaValue) -> Value {
         SchemaValue::Boolean(b) => Value::Bool(*b),
         SchemaValue::Integer(n) => Value::Number(*n as f64),
         SchemaValue::UnsignedInteger(n) => Value::Number(*n as f64),
-        SchemaValue::Float(n) => Value::Number(*n),
+        SchemaValue::Float(n) if n.is_finite() => Value::Number(*n),
+        SchemaValue::Float(n) => typed_singleton("$float", Value::String(float_token(*n))),
         SchemaValue::BigInt(n) => Value::Number(*n as f64),
-        SchemaValue::TimestampMs(n)
-        | SchemaValue::Timestamp(n)
-        | SchemaValue::Duration(n)
-        | SchemaValue::Decimal(n) => Value::Number(*n as f64),
+        SchemaValue::Timestamp(n) => typed_singleton("$ts", Value::String(n.to_string())),
+        SchemaValue::TimestampMs(n) | SchemaValue::Duration(n) | SchemaValue::Decimal(n) => {
+            Value::Number(*n as f64)
+        }
         SchemaValue::Password(_) | SchemaValue::Secret(_) => Value::String("***".to_string()),
         SchemaValue::Text(s) => Value::String(s.to_string()),
+        SchemaValue::Blob(bytes) => typed_singleton("$bytes", Value::String(base64_encode(bytes))),
+        SchemaValue::Json(bytes) => json::from_slice(bytes)
+            .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(bytes).into())),
+        SchemaValue::Uuid(bytes) => typed_singleton("$uuid", Value::String(format_uuid(bytes))),
         SchemaValue::Email(s)
         | SchemaValue::Url(s)
         | SchemaValue::NodeRef(s)
@@ -1180,8 +1185,7 @@ pub(crate) fn json_value_to_schema_value(v: &Value) -> SchemaValue {
         Value::Array(items) => {
             // Tracer for #355: a JSON array of numbers (or empty) is taken
             // as a `Value::Vector`. Mixed/non-number arrays fall back to
-            // the JSON-string form so the binder can reject them with a
-            // typed error when they land in a vector slot.
+            // canonical JSON so object/array params bind as Json.
             if items.iter().all(|v| matches!(v, Value::Number(_))) {
                 let floats: Vec<f32> = items
                     .iter()
@@ -1189,11 +1193,156 @@ pub(crate) fn json_value_to_schema_value(v: &Value) -> SchemaValue {
                     .collect();
                 SchemaValue::Vector(floats)
             } else {
-                SchemaValue::text(crate::json::to_string(v).unwrap_or_default())
+                SchemaValue::Json(crate::json::to_string(v).unwrap_or_default().into_bytes())
             }
         }
-        Value::Object(_) => SchemaValue::text(crate::json::to_string(v).unwrap_or_default()),
+        Value::Object(map) => {
+            if map.len() == 1 {
+                if let Some(Value::String(encoded)) = map.get("$bytes") {
+                    if let Some(bytes) = base64_decode(encoded) {
+                        return SchemaValue::Blob(bytes);
+                    }
+                }
+                if let Some(value) = map.get("$ts") {
+                    if let Some(ts) = parse_i64_json(value) {
+                        return SchemaValue::Timestamp(ts);
+                    }
+                }
+                if let Some(Value::String(token)) = map.get("$float") {
+                    if let Some(value) = parse_float_token(token) {
+                        return SchemaValue::Float(value);
+                    }
+                }
+                if let Some(Value::String(uuid)) = map.get("$uuid") {
+                    if let Some(bytes) = parse_uuid(uuid) {
+                        return SchemaValue::Uuid(bytes);
+                    }
+                }
+            }
+            SchemaValue::Json(crate::json::to_string(v).unwrap_or_default().into_bytes())
+        }
     }
+}
+
+fn typed_singleton(key: &str, value: Value) -> Value {
+    Value::Object([(key.to_string(), value)].into_iter().collect())
+}
+
+fn float_token(value: f64) -> String {
+    if value.is_nan() {
+        "NaN".to_string()
+    } else if value.is_sign_negative() {
+        "-Infinity".to_string()
+    } else {
+        "Infinity".to_string()
+    }
+}
+
+fn parse_float_token(token: &str) -> Option<f64> {
+    match token {
+        "NaN" => Some(f64::NAN),
+        "Infinity" => Some(f64::INFINITY),
+        "-Infinity" => Some(f64::NEG_INFINITY),
+        _ => token.parse::<f64>().ok(),
+    }
+}
+
+fn parse_i64_json(value: &Value) -> Option<i64> {
+    match value {
+        Value::String(s) => s.parse::<i64>().ok(),
+        Value::Number(n) if n.is_finite() && *n >= i64::MIN as f64 && *n <= i64::MAX as f64 => {
+            Some(*n as i64)
+        }
+        _ => None,
+    }
+}
+
+fn base64_encode(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity((bytes.len() + 2) / 3 * 4);
+    let mut chunks = bytes.chunks_exact(3);
+    for c in chunks.by_ref() {
+        let n = ((c[0] as u32) << 16) | ((c[1] as u32) << 8) | c[2] as u32;
+        out.push(TABLE[((n >> 18) & 0x3f) as usize] as char);
+        out.push(TABLE[((n >> 12) & 0x3f) as usize] as char);
+        out.push(TABLE[((n >> 6) & 0x3f) as usize] as char);
+        out.push(TABLE[(n & 0x3f) as usize] as char);
+    }
+    match chunks.remainder() {
+        [] => {}
+        [a] => {
+            let n = (*a as u32) << 16;
+            out.push(TABLE[((n >> 18) & 0x3f) as usize] as char);
+            out.push(TABLE[((n >> 12) & 0x3f) as usize] as char);
+            out.push('=');
+            out.push('=');
+        }
+        [a, b] => {
+            let n = ((*a as u32) << 16) | ((*b as u32) << 8);
+            out.push(TABLE[((n >> 18) & 0x3f) as usize] as char);
+            out.push(TABLE[((n >> 12) & 0x3f) as usize] as char);
+            out.push(TABLE[((n >> 6) & 0x3f) as usize] as char);
+            out.push('=');
+        }
+        _ => unreachable!(),
+    }
+    out
+}
+
+fn base64_decode(input: &str) -> Option<Vec<u8>> {
+    fn val(b: u8) -> Option<u8> {
+        match b {
+            b'A'..=b'Z' => Some(b - b'A'),
+            b'a'..=b'z' => Some(b - b'a' + 26),
+            b'0'..=b'9' => Some(b - b'0' + 52),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    }
+
+    let bytes = input.as_bytes();
+    if !bytes.len().is_multiple_of(4) {
+        return None;
+    }
+    let mut out = Vec::with_capacity(bytes.len() / 4 * 3);
+    for chunk in bytes.chunks_exact(4) {
+        let a = val(chunk[0])?;
+        let b = val(chunk[1])?;
+        let c = if chunk[2] == b'=' { 64 } else { val(chunk[2])? };
+        let d = if chunk[3] == b'=' { 64 } else { val(chunk[3])? };
+        out.push((a << 2) | (b >> 4));
+        if c != 64 {
+            out.push((b << 4) | (c >> 2));
+        }
+        if d != 64 {
+            out.push((c << 6) | d);
+        }
+    }
+    Some(out)
+}
+
+fn format_uuid(bytes: &[u8; 16]) -> String {
+    let mut out = String::with_capacity(36);
+    for (idx, byte) in bytes.iter().enumerate() {
+        if matches!(idx, 4 | 6 | 8 | 10) {
+            out.push('-');
+        }
+        out.push_str(&format!("{byte:02x}"));
+    }
+    out
+}
+
+fn parse_uuid(input: &str) -> Option<[u8; 16]> {
+    let hex = input.replace('-', "");
+    if hex.len() != 32 || hex.bytes().any(|b| !b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let mut out = [0u8; 16];
+    for (idx, slot) in out.iter_mut().enumerate() {
+        *slot = u8::from_str_radix(&hex[idx * 2..idx * 2 + 2], 16).ok()?;
+    }
+    Some(out)
 }
 
 // ---------------------------------------------------------------------------
@@ -1981,5 +2130,104 @@ mod tests {
             );
             assert!(exec.contains("42"), "expected row with n=42 in: {exec}");
         });
+    }
+
+    #[test]
+    fn json_rpc_value_envelopes_preserve_non_json_scalars() {
+        let input: crate::json::Value = crate::json::from_str(
+            r#"{
+                "bytes":{"$bytes":"3q2+7w=="},
+                "json":{"b":2,"a":1},
+                "ts":{"$ts":"9223372036854775807"},
+                "uuid":{"$uuid":"00112233-4455-6677-8899-aabbccddeeff"}
+            }"#,
+        )
+        .expect("json");
+
+        assert_eq!(
+            json_value_to_schema_value(input.get("bytes").expect("bytes")),
+            SchemaValue::Blob(vec![0xde, 0xad, 0xbe, 0xef])
+        );
+        assert_eq!(
+            json_value_to_schema_value(input.get("ts").expect("ts")),
+            SchemaValue::Timestamp(i64::MAX)
+        );
+        assert_eq!(
+            json_value_to_schema_value(input.get("uuid").expect("uuid")),
+            SchemaValue::Uuid([
+                0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd,
+                0xee, 0xff,
+            ])
+        );
+        assert_eq!(
+            json_value_to_schema_value(input.get("json").expect("json")),
+            SchemaValue::Json(br#"{"a":1,"b":2}"#.to_vec())
+        );
+
+        assert_eq!(
+            schema_value_to_json(&SchemaValue::Blob(vec![0xde, 0xad, 0xbe, 0xef])),
+            crate::json::from_str(r#"{"$bytes":"3q2+7w=="}"#).expect("json")
+        );
+        assert_eq!(
+            schema_value_to_json(&SchemaValue::Timestamp(i64::MIN)),
+            crate::json::from_str(r#"{"$ts":"-9223372036854775808"}"#).expect("json")
+        );
+        assert_eq!(
+            schema_value_to_json(&SchemaValue::Uuid([
+                0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd,
+                0xee, 0xff,
+            ])),
+            crate::json::from_str(r#"{"$uuid":"00112233-4455-6677-8899-aabbccddeeff"}"#)
+                .expect("json")
+        );
+        assert_eq!(
+            schema_value_to_json(&SchemaValue::Json(br#"{"a":1,"b":2}"#.to_vec())),
+            crate::json::from_str(r#"{"a":1,"b":2}"#).expect("json")
+        );
+    }
+
+    #[test]
+    fn query_params_round_trip_additional_value_variants_over_json_rpc() {
+        let rt = make_runtime();
+        let create = handle(
+            &rt,
+            r#"{"jsonrpc":"2.0","id":1,"method":"query","params":{"sql":"CREATE TABLE value_params (id INTEGER, active BOOLEAN, score FLOAT, payload BLOB, meta JSON, created_at TIMESTAMP, uid UUID)"}}"#,
+        );
+        assert!(!create.contains("\"error\""), "create response: {create}");
+
+        let insert = handle(
+            &rt,
+            r#"{"jsonrpc":"2.0","id":2,"method":"query","params":{"sql":"INSERT INTO value_params (id, active, score, payload, meta, created_at, uid) VALUES (1, $1, $2, $3, $4, $5, $6)","params":[true,1.5,{"$bytes":"3q2+7w=="},{"b":2,"a":1},{"$ts":"1700000000"},{"$uuid":"00112233-4455-6677-8899-aabbccddeeff"}]}}"#,
+        );
+        assert!(!insert.contains("\"error\""), "insert response: {insert}");
+
+        let select = handle(
+            &rt,
+            r#"{"jsonrpc":"2.0","id":3,"method":"query","params":{"sql":"SELECT * FROM value_params"}}"#,
+        );
+        assert!(
+            select.contains("\"active\":true"),
+            "select response: {select}"
+        );
+        assert!(
+            select.contains("\"score\":1.5"),
+            "select response: {select}"
+        );
+        assert!(
+            select.contains(r#""payload":{"$bytes":"3q2+7w=="}"#),
+            "select response: {select}"
+        );
+        assert!(
+            select.contains(r#""meta":{"a":1,"b":2}"#),
+            "select response: {select}"
+        );
+        assert!(
+            select.contains(r#""created_at":{"$ts":"1700000000"}"#),
+            "select response: {select}"
+        );
+        assert!(
+            select.contains(r#""uid":{"$uuid":"00112233-4455-6677-8899-aabbccddeeff"}"#),
+            "select response: {select}"
+        );
     }
 }

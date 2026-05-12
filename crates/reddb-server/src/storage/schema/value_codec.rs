@@ -956,6 +956,22 @@ pub fn decode(data: &[u8]) -> Result<(Value, usize), ValueError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+
+    fn assert_round_trip(original: Value) {
+        let mut bytes = Vec::new();
+        encode(&original, &mut bytes);
+        let (recovered, consumed) = decode(&bytes).expect("decode");
+        assert_eq!(consumed, bytes.len());
+        assert_value_eq(&original, &recovered);
+    }
+
+    fn assert_value_eq(left: &Value, right: &Value) {
+        match (left, right) {
+            (Value::Float(a), Value::Float(b)) => assert_eq!(a.to_bits(), b.to_bits()),
+            _ => assert_eq!(left, right),
+        }
+    }
 
     /// Pinned on-disk byte layout for the canonical [`Value`]
     /// variants. **If this test breaks, callers with persisted data
@@ -1082,6 +1098,52 @@ mod tests {
             let (recovered, consumed) = decode(&bytes).expect("decode");
             assert_eq!(consumed, bytes.len());
             assert_eq!(original, recovered);
+        }
+    }
+
+    #[test]
+    fn round_trip_additional_value_boundaries() {
+        for value in [
+            Value::Integer(i64::MIN),
+            Value::Integer(i64::MAX),
+            Value::Float(f64::NAN),
+            Value::Float(f64::INFINITY),
+            Value::Float(f64::NEG_INFINITY),
+            Value::Float(f64::from_bits(1)),
+            Value::Blob(Vec::new()),
+            Value::Blob(vec![0xab; 4096]),
+            Value::Json(br#"{"a":[{"b":true}]}"#.to_vec()),
+            Value::Timestamp(i64::MIN),
+            Value::Timestamp(i64::MAX),
+            Value::Uuid([
+                0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd,
+                0xee, 0xff,
+            ]),
+        ] {
+            assert_round_trip(value);
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn prop_round_trip_additional_values(
+            b in any::<bool>(),
+            float_bits in any::<u64>(),
+            bytes in proptest::collection::vec(any::<u8>(), 0..512),
+            json_bytes in proptest::collection::vec(any::<u8>(), 0..512),
+            ts in any::<i64>(),
+            uuid in any::<[u8; 16]>(),
+        ) {
+            for value in [
+                Value::Boolean(b),
+                Value::Float(f64::from_bits(float_bits)),
+                Value::Blob(bytes.clone()),
+                Value::Json(json_bytes.clone()),
+                Value::Timestamp(ts),
+                Value::Uuid(uuid),
+            ] {
+                assert_round_trip(value);
+            }
         }
     }
 }

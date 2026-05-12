@@ -29,11 +29,21 @@ Each variant gets parser context support in the binder (which clauses accept whi
 
 ## Acceptance criteria
 
-- [ ] All variants round-trip through embedded stdio JSON-RPC.
-- [ ] JS SDK maps native types correctly: `null`, `boolean`, `number` (int vs float distinction documented), `Uint8Array`, `Date`, plain object → json, UUID strings.
-- [ ] Boundary values tested: i64::MIN/MAX, f64 NaN/±inf, empty/very long bytes, deeply nested json.
-- [ ] Property-based round-trip tests for the wire Value codec (deep module).
-- [ ] Binder rejects type mismatches with typed errors per variant.
+- [x] All variants round-trip through embedded stdio JSON-RPC.
+- [x] JS SDK maps native types correctly: `null`, `boolean`, `number` (int vs float distinction documented), `Uint8Array`, `Date`, plain object → json, UUID strings.
+- [x] Boundary values tested: i64::MIN/MAX, f64 NaN/±inf, empty/very long bytes, deeply nested json.
+- [x] Property-based round-trip tests for the wire Value codec (deep module).
+- [x] Binder rejects type mismatches with typed errors per variant.
+
+## Done
+
+- Added JSON-RPC typed parameter/result envelopes for bytes, timestamps, UUIDs,
+  JSON, and non-finite floats.
+- Routed bound `INSERT` shapes through the existing insert executor so
+  parameterized typed inserts can complete end-to-end.
+- Extended JS SDK embedded parameter serialization for `Uint8Array`, `Date`,
+  UUID strings, plain JSON objects, and non-finite numbers.
+- Added stdio JSON-RPC, JS SDK, RedWire codec, and value-codec property tests.
 
 ## Blocked by
 
