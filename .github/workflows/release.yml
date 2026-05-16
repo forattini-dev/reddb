@@ -133,9 +133,7 @@ jobs:
   build:
     name: Build ${{ matrix.asset_name }}
     needs: [plan]
-    if: |
-      needs.plan.outputs.should_skip != 'true' &&
-      needs.plan.outputs.release_channel == 'stable'
+    if: needs.plan.outputs.should_skip != 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     continue-on-error: ${{ matrix.optional == true }}
@@ -680,6 +678,10 @@ jobs:
         with:
           name: linux-x86_64
           path: release/linux-x86_64
+      - uses: actions/download-artifact@v8
+        with:
+          name: linux-aarch64
+          path: release/linux-aarch64
       - uses: actions/setup-node@v6
         with:
           node-version: '22'
@@ -690,12 +692,16 @@ jobs:
           node scripts/sync-version.js
           bash scripts/check-versions.sh
 
-      - name: Prepare release binary for Docker
+      - name: Prepare release binaries for Docker
         run: |
           set -euo pipefail
-          mkdir -p docker-bin/amd64
+          mkdir -p docker-bin/amd64 docker-bin/arm64
           cp release/linux-x86_64/red_client-linux-x86_64 docker-bin/amd64/red_client
-          chmod 755 docker-bin/amd64/red_client
+          cp release/linux-aarch64/red_client-linux-aarch64 docker-bin/arm64/red_client
+          chmod 755 docker-bin/amd64/red_client docker-bin/arm64/red_client
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -729,9 +735,7 @@ jobs:
           context: .
           file: Dockerfile.client.release
           push: true
-          # Only linux/amd64 for now because the published client image tracks
-          # the existing linux-x86_64 release artifact.
-          platforms: linux/amd64
+          platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           provenance: false
